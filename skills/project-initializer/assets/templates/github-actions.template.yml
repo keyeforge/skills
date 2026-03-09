@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["{{MAIN_BRANCH}}"]
+
+env:
+  MAIN_BRANCH: "{{MAIN_BRANCH}}"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # COMMIT CHECK JOBS
+  # Run on every push. Fast feedback loop.
+  # ─────────────────────────────────────────────
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    container:
+      image: {{DOCKER_IMAGE}}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: {{INSTALL_CMD}}
+      - name: Lint
+        run: {{LINT_CMD}}
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    container:
+      image: {{DOCKER_IMAGE}}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: {{INSTALL_CMD}}
+      - name: Run tests
+        run: {{TEST_CMD}}
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  commit-format:
+    name: Commit Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate conventional commit format
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          echo "Commit message: $COMMIT_MSG"
+          if ! echo "$COMMIT_MSG" | grep -qE '^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .+'; then
+            echo "ERROR: Commit message does not follow Conventional Commits format."
+            echo "Expected: type(scope): description"
+            echo "Valid types: feat fix docs style refactor test chore perf ci build revert"
+            echo "See AGENTS.md for examples."
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────
+  # RELEASE CHECK JOBS
+  # Run on PRs targeting main and on pushes to main.
+  # Stricter: coverage, security, SDD process docs.
+  # ─────────────────────────────────────────────
+
+  full-test-suite:
+    name: Full Test Suite + Coverage
+    runs-on: ubuntu-latest
+    if: github.ref == format('refs/heads/{0}', '{{MAIN_BRANCH}}') || github.base_ref == '{{MAIN_BRANCH}}'
+    container:
+      image: {{DOCKER_IMAGE}}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: {{INSTALL_CMD}}
+      - name: Run full test suite
+        run: {{TEST_CMD}}
+      - name: Generate coverage report
+        run: {{COVERAGE_CMD}}
+      - name: Coverage gate
+        run: |
+          THRESHOLD="{{COVERAGE_THRESHOLD}}"
+          if [ "$THRESHOLD" = "0" ] || [ "$THRESHOLD" = "N/A" ]; then
+            echo "Coverage gate disabled (demo/prototype)."
+            exit 0
+          fi
+          # Adjust the parsing below to match your coverage reporter output format
+          COVERAGE=$(grep -oP 'line-rate="\K[0-9.]+' coverage/cobertura.xml | head -1 | awk '{printf "%.0f", $1 * 100}')
+          echo "Coverage: ${COVERAGE}%  |  Threshold: ${THRESHOLD}%"
+          if [ "$COVERAGE" -lt "$THRESHOLD" ]; then
+            echo "ERROR: Coverage ${COVERAGE}% is below the required ${THRESHOLD}%."
+            exit 1
+          fi
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-full
+          path: coverage/
+          retention-days: 7
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    if: github.ref == format('refs/heads/{0}', '{{MAIN_BRANCH}}') || github.base_ref == '{{MAIN_BRANCH}}'
+    container:
+      image: {{DOCKER_IMAGE}}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: {{INSTALL_CMD}}
+      - name: Security scan
+        run: {{SECURITY_SCAN_CMD}}
+
+  # ─────────────────────────────────────────────
+  # PROJECT IDENTITY CHECK
+  #
+  # Verifies AGENTS.md contains the @project-initializer tag.
+  # Runs on every push to main and on PRs targeting main.
+  # This ensures the project was properly initialized and
+  # CI has the metadata it needs to make informed decisions.
+  #
+  # Suppress with [ignore:project_tag] in commit message only
+  # if you are deliberately migrating an existing project.
+  # ─────────────────────────────────────────────
+  project-tag-check:
+    name: Project Identity Tag Check
+    runs-on: ubuntu-latest
+    if: github.ref == format('refs/heads/{0}', '{{MAIN_BRANCH}}') || github.base_ref == '{{MAIN_BRANCH}}'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check AGENTS.md project identity tag
+        run: |
+          chmod +x scripts/check_project_tag.sh
+          scripts/check_project_tag.sh
+
+  # ─────────────────────────────────────────────
+  # SDD PROCESS DOCUMENTATION CHECK
+  #
+  # Verifies that code changes are backed by corresponding
+  # SDD process documents (specs / plans / tasks).
+  #
+  # Developers can suppress specific checks with structured
+  # tags in the commit message. See AGENTS.md for the full
+  # list of ignore tags.
+  #
+  # Example:
+  #   fix: correct null pointer in login [ignore:spec_sync]
+  #   chore: bump dependencies         [ignore:all_sdd]
+  # ─────────────────────────────────────────────
+  sdd-process-check:
+    name: SDD Process Documentation Check
+    runs-on: ubuntu-latest
+    if: github.ref == format('refs/heads/{0}', '{{MAIN_BRANCH}}') || github.base_ref == '{{MAIN_BRANCH}}'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to compare against merge base
+      - name: Run SDD process check
+        env:
+          CI_MERGE_REQUEST_DIFF_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          chmod +x {{SDD_CHECK_SCRIPT}}
+          {{SDD_CHECK_SCRIPT}}
