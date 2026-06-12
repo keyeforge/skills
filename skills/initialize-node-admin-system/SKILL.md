@@ -83,19 +83,7 @@ ADMIN_PASSWORD=<admin-password>
 cd frontend && npm install
 ```
 
-11. If the user wants a fresh Git repository:
-
-```bash
-git init
-git add .
-git commit -m "Initial project from Directus admin template"
-```
-
-Only commit when the user explicitly asked for a commit.
-
-## Optional Bootstrap
-
-When the user wants the project fully runnable, start Directus and initialize the schema:
+11. Start Directus and run all template-provided database bootstrap scripts during initialization. Do not leave schema/table generation as a manual follow-up:
 
 ```bash
 docker compose up -d
@@ -111,7 +99,21 @@ sqlite3 database/data.db < scripts/bootstrap-policy-data-scopes.sql
 docker compose restart directus
 ```
 
-Then run the frontend:
+If Docker or SQLite is unavailable, stop and report the missing prerequisite instead of declaring initialization complete.
+
+12. If the user wants a fresh Git repository:
+
+```bash
+git init
+git add .
+git commit -m "Initial project from Directus admin template"
+```
+
+Only commit when the user explicitly asked for a commit.
+
+## Optional Runtime
+
+When the user wants the local app running after initialization, start the frontend:
 
 ```bash
 cd frontend && npm run dev
@@ -129,7 +131,8 @@ After initialization, verify:
 - `.env` exists and does not contain the placeholder `replace-with-random-64-char-hex-string`.
 - `frontend/package.json` has the derived project-specific package name.
 - `frontend/.env` points to the intended Directus URL.
+- The template bootstrap scripts have created the expected Directus tables in `database/data.db`.
+- `docker compose ps` shows Directus running after the bootstrap step.
 - `npm run build` passes in `frontend/` when the user asks for a build check.
-- `docker compose ps` shows Directus running when the user asks for a runnable local setup.
 
 Do not commit `.env`, `database/data.db`, uploads, or other local runtime state unless the user explicitly asks and understands the risk.
